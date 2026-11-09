@@ -33,7 +33,6 @@ from core.const import BUCKET_DIRNAME, BUCKET_LABEL, flag_text
 from core.project import Project
 
 from . import theme, workers
-from .burst import BurstDialog
 from .photo_model import PhotoGrid, PhotoModel
 from .viewer import ViewerDialog
 
@@ -44,7 +43,6 @@ FILTERS = [
     ("maybe", "待定 · 3-4★"),
     ("reject", "淘汰 · 1-2★"),
     ("flagged", "有硬伤"),
-    ("grouped", "连拍组"),
 ]
 
 
@@ -219,7 +217,7 @@ class EmptyState(QWidget):
 
         hint = QLabel(
             "打开一个照片文件夹，打分后一键分到「精选 / 待定 / 淘汰」。\n"
-            "自动分析清晰度、曝光，并把连拍挑出最清晰的一张。"
+            "自动标出失焦、过曝、分辨率过低的照片，只提示、不替你删。"
         )
         hint.setObjectName("EmptyHint")
         hint.setAlignment(Qt.AlignCenter)
@@ -354,14 +352,12 @@ class MainWindow(QMainWindow):
         )
         lay.addWidget(density_box)
 
-        self.group_btn = QPushButton("连拍去重")
-        self.group_btn.clicked.connect(self.open_burst)
         self.scan_btn = QPushButton("重新扫描")
         self.scan_btn.clicked.connect(lambda: self.reload(sync=True))
         self.archive_btn = QPushButton("归档…")
         self.archive_btn.setObjectName("Primary")
         self.archive_btn.clicked.connect(self.open_archive)
-        for b in (self.group_btn, self.scan_btn, self.archive_btn):
+        for b in (self.scan_btn, self.archive_btn):
             b.setEnabled(False)
             lay.addWidget(b)
 
@@ -428,12 +424,11 @@ class MainWindow(QMainWindow):
         return bar
 
     def _bind_shortcuts(self) -> None:
-        for key in "012345":
+        for key in "12345":
             QShortcut(QKeySequence(key), self, activated=lambda k=int(key): self.score_selection(k))
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self.choose_folder)
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.undo_last)
         QShortcut(QKeySequence("Ctrl+F"), self, activated=self.open_archive)
-        QShortcut(QKeySequence("Ctrl+G"), self, activated=self.open_burst)
         QShortcut(QKeySequence("F5"), self, activated=lambda: self.reload(sync=True))
         QShortcut(QKeySequence("Return"), self, activated=self.open_viewer_current)
         QShortcut(QKeySequence("Space"), self, activated=self.open_viewer_current)
@@ -465,10 +460,10 @@ class MainWindow(QMainWindow):
         self.model.thumbs = self.project.thumbs
         self.path_label.setText(str(path))
         self.store_setting("last_folder", str(path))
-        for btn in (self.scan_btn, self.archive_btn, self.group_btn):
+        for btn in (self.scan_btn, self.archive_btn):
             btn.setEnabled(True)
         self.stack.setCurrentWidget(self.grid)
-        self.reload(sync=True, regroup_when_done=True)
+        self.reload(sync=True)
 
     def _report_storage(self, project: Project) -> None:
         if project.portable:
@@ -487,20 +482,20 @@ class MainWindow(QMainWindow):
         self.storage_chip.show()
         self.set_status(f"照片文件夹不可写，打分记录改存在{where}（功能不受影响）")
 
-    def reload(self, sync: bool = False, regroup_when_done: bool = False) -> None:
+    def reload(self, sync: bool = False) -> None:
         if not self.project:
             return
         if sync:
             self.set_busy("正在扫描文件夹…")
             self._run(
                 self.project.sync,
-                on_done=lambda stats: self._after_sync(stats, regroup_when_done),
+                on_done=self._after_sync,
                 busy=True,
             )
         else:
             self.refresh_view()
 
-    def _after_sync(self, stats: dict, regroup: bool) -> None:
+    def _after_sync(self, stats: dict) -> None:
         skipped = stats.get("skipped") or {}
         skipped_total = int(stats.get("skipped_total") or 0)
         unreadable = int(skipped.pop("(无法访问)", 0)) if skipped else 0
@@ -537,27 +532,15 @@ class MainWindow(QMainWindow):
                 lambda done, total: (self.progress.setValue(done),
                                      self.status_text.setText(f"正在分析 {done}/{total}…"))
             )
-            job.signals.finished.connect(lambda n: self._after_analyze(n, regroup))
+            job.signals.finished.connect(self._after_analyze)
             job.signals.failed.connect(self._on_error)
             self._jobs.append(job)
             workers.pool(3).start(job)
         else:
-            self._after_analyze(0, regroup)
+            self._after_analyze(0)
 
-    def _after_analyze(self, analyzed: int, regroup: bool) -> None:
-        note = f"分析完成 {analyzed} 张" if analyzed else "已是最新"
-        if regroup or self.project.store.get_setting("need_group", False):
-            self._regroup_async(lambda groups: self._finish_load(f"{note} · {groups} 组连拍"))
-        else:
-            self._finish_load(note)
-
-    def _regroup_async(self, on_done) -> None:
-        self.set_busy("正在识别连拍…")
-        job = workers.Job(self.project.regroup, want_callbacks=False)
-        job.signals.finished.connect(on_done)
-        job.signals.failed.connect(self._on_error)
-        self._jobs.append(job)
-        workers.pool(2).start(job)
+    def _after_analyze(self, analyzed: int) -> None:
+        self._finish_load(f"分析完成 {analyzed} 张" if analyzed else "已是最新")
 
     def _finish_load(self, note: str) -> None:
         self.progress.hide()
@@ -589,12 +572,6 @@ class MainWindow(QMainWindow):
         store = self.project.store
         if self.filter_key == "flagged":
             return store.photos(flagged_only=True, order="path")
-        if self.filter_key == "grouped":
-            groups = store.group_list()
-            items: list[dict] = []
-            for g in groups:
-                items.extend(store.group_members(g["group_id"]))
-            return items
         return store.photos(bucket=self.filter_key)
 
     def refresh_view(self) -> None:
@@ -617,7 +594,6 @@ class MainWindow(QMainWindow):
             "maybe": c.get("maybe", 0),
             "reject": c.get("reject", 0),
             "flagged": c.get("flagged", 0),
-            "grouped": c.get("groups", 0),
         }
         for key, label in FILTERS:
             if key in self.nav_buttons:
@@ -711,70 +687,6 @@ class MainWindow(QMainWindow):
         self.project.store.set_score([photo_id], score)
         self.model.update_scores({photo_id}, score)
         self._update_counts()
-
-    # ------------------------------------------------------------ 连拍
-    def open_burst(self) -> None:
-        if not self.project:
-            QMessageBox.information(self, "还没打开文件夹", "先用 Ctrl+O 选一个照片文件夹。")
-            return
-        groups = self.project.store.group_list()
-        if groups:
-            self._show_burst(groups)
-            return
-        # 没有分组：先自己算一遍，算完再决定给不给提示
-        self.set_busy("正在识别连拍…")
-        self._run(self.project.regroup, on_done=self._after_burst_regroup)
-
-    def _after_burst_regroup(self, _count: int) -> None:
-        groups = self.project.store.group_list()
-        if not groups:
-            self.set_status("没有识别到连拍组")
-            stats = self.project.burst_stats()
-            if stats["in_window"] == 0:
-                reason = (
-                    "相邻两张的拍摄时间都相隔超过 2 秒（分次拍摄、或从不同设备导入时很常见），"
-                    "所以没有被并成一组。"
-                )
-            elif stats["closest"] > 10:
-                reason = "时间上相邻的那几张，画面差异比较大，判定为不同场景，不是连拍。"
-            else:
-                reason = "这些照片的拍摄时间信息不足，无法可靠地判断连拍。"
-            lines = [
-                f"共 {stats['total']} 张照片，没有发现「同一场景的连续多张」。",
-                "",
-                "连拍识别条件：拍摄时间相隔 ≤2 秒，且画面高度相似。",
-                reason,
-                "",
-                f"其中带拍摄时间信息的 {stats['timed']} 张。",
-                "照片本身没问题，直接打分就行。",
-            ]
-            QMessageBox.information(self, "没有找到连拍组", "\n".join(lines))
-            return
-        self.set_status(f"{len(groups)} 组连拍")
-        self._show_burst(groups)
-
-    def _show_burst(self, groups: list[dict]) -> None:
-        dialog = BurstDialog(
-            self.project.thumbs,
-            self.project.root,
-            groups,
-            self.project.store.group_members,
-            self,
-        )
-        dialog.scores_ready.connect(self._apply_burst_scores)
-        dialog.exec()
-        self.refresh_view()
-
-    def _apply_burst_scores(self, scores: dict) -> None:
-        if not self.project:
-            return
-        by_score: dict[int, list[int]] = {}
-        for pid, score in scores.items():
-            by_score.setdefault(score, []).append(pid)
-        for score, ids in by_score.items():
-            self.project.store.set_score(ids, score)
-        self.model.update_scores(set(scores), 0)  # 触发重绘
-        self.refresh_view()
 
     # ------------------------------------------------------------ 归档
     def open_archive(self) -> None:
@@ -907,6 +819,8 @@ class MainWindow(QMainWindow):
     def _restore_state(self) -> None:
         from PySide6.QtCore import QSettings
 
+        if getattr(self, "quiet", False):
+            return  # 截图自检时不恢复上次的窗口大小和文件夹
         settings = QSettings("LitePick", "轻选片")
         geo = settings.value("geometry")
         if geo:

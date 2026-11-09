@@ -245,15 +245,16 @@ class PhotoDelegate(QStyledItemDelegate):
         if score <= 0:
             return
         r = 10.0
-        box_w = score * r * 0.95 + 14
+        # 1 星时宽度只有一颗星，别让胶囊缩成圆圈
+        box_w = max(26.0, score * r * 0.95 + 14)
         box = QRectF(rect.left() + 8, rect.bottom() - 30, box_w, 22)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(QColor(0, 0, 0, 110)))
-        painter.drawRoundedRect(box, 11, 11)
+        painter.setBrush(QBrush(QColor(0, 0, 0, 140)))
+        painter.drawRoundedRect(box, 7, 7)
 
         painter.setBrush(QBrush(theme.C_GOLD))
         for i in range(score):
-            cx = box.left() + 7 + i * r * 0.95
+            cx = box.left() + (box.width() - (score * r * 0.95)) / 2 + i * r * 0.95 + r * 0.1
             cy = box.center().y()
             star = QPainterPath()
             # 五角星

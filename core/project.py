@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import analyze, archive, burst, paths
+from . import analyze, archive, paths
 from . import const
 from .const import BUCKET_DIRNAME
 from .store import Store
@@ -111,13 +111,6 @@ class Project:
             total += self.analyze_pending(progress=progress, should_stop=should_stop)
         return total
 
-    # ---------------------------------------------------------------- 分组
-    def regroup(self, **_ignored) -> int:
-        """重算连拍分组，返回组数。照片量小时很快（1000 张约 1 秒）。"""
-        photos = self.store.all_for_grouping()
-        groups = burst.build_groups(photos)
-        return self.store.assign_groups(groups)
-
     # ---------------------------------------------------------------- 归档
     def archive(self, bucket, mode: str = "move", **_ignored) -> dict:
         """归档一个分档，或一次归档多个分档（"一键全部归档"）。"""
@@ -130,31 +123,6 @@ class Project:
         return archive.undo(self.store, log_id)
 
     # ---------------------------------------------------------------- 查询
-    def burst_stats(self) -> dict:
-        """给「没识别到连拍」的提示用：照片数、带时间的数量、最接近的一对距离、时间相邻的对数。"""
-        rows = self.store.all_for_grouping()
-        timed = sum(1 for r in rows if r.get("taken_at"))
-        closest = 64
-        in_window = 0
-        for a, b in zip(rows, rows[1:]):
-            try:
-                gap = abs(float(b["taken_at"] or 0) - float(a["taken_at"] or 0))
-            except (TypeError, ValueError):
-                gap = 0.0
-            if gap <= const.BURST_TIME_GAP:
-                in_window += 1
-            try:
-                distance = analyze.hamming(int(a["dhash"]), int(b["dhash"]))
-            except (TypeError, ValueError):
-                continue
-            closest = min(closest, distance)
-        return {
-            "total": len(self.store.photos()),
-            "timed": timed,
-            "closest": closest,
-            "in_window": in_window,
-        }
-
     def photos(self, **kwargs) -> list[dict]:
         return self.store.photos(**kwargs)
 
@@ -169,14 +137,12 @@ class Project:
             self.store.close()
 
 
-def quick_open(root: str | Path, do_group: bool = True) -> tuple[Project, dict]:
-    """一步到位：扫描 + 分析 + 分组。给脚本和首启流程用。"""
+def quick_open(root: str | Path) -> tuple[Project, dict]:
+    """一步到位：扫描 + 分析。给脚本和首启流程用。"""
     proj = Project(root)
     stats = proj.sync()
     started = time.time()
     analyzed = proj.analyze_pending_until_empty()
     stats["analyzed"] = analyzed
     stats["analyze_seconds"] = round(time.time() - started, 2)
-    if do_group:
-        stats["groups"] = proj.regroup()
     return proj, stats

@@ -56,7 +56,7 @@ def main() -> int:
     counts = proj.counts()
     print(
         f"扫描 {stats['total']} 张（新增 {stats['added']}），"
-        f"分析 {stats['analyzed']} 张，{stats['groups']} 组连拍，耗时 {elapsed:.2f}s\n"
+        f"分析 {stats['analyzed']} 张，耗时 {elapsed:.2f}s\n"
     )
 
     check("扫描到照片", counts["total"] > 0, f"{counts['total']} 张")
@@ -69,18 +69,6 @@ def main() -> int:
 
     flags = [(p["name"], flag_text(p["flags"])) for p in photos if p["flags"]]
     check("硬伤能被识别", bool(flags), "、".join(f"{n}→{t}" for n, t in flags[:4]) or "无")
-
-    groups = proj.store.group_list()
-    check("连拍能聚成组", bool(groups),
-          "、".join(f"组{g['group_id']}({g['count']}张)" for g in groups[:3]) or "无")
-
-    sharp_sorted = True
-    for g in groups[:3]:
-        members = proj.store.group_members(g["group_id"])
-        values = [m["sharp"] or 0 for m in members]
-        if values != sorted(values, reverse=True):
-            sharp_sorted = False
-    check("连拍组内按清晰度排序", sharp_sorted)
 
     # 归档 → 撤销
     pick_ids = [p["id"] for p in photos[:3]]

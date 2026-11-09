@@ -82,6 +82,9 @@ def main() -> int:
 
     window = MainWindow()
     window.quiet = bool(shot)
+    if shot:
+        # 截图自检固定窗口尺寸，别继承上次的最大化状态，出图才一致
+        window.resize(1280, 840)
     window.show()
 
     if folder and folder.is_dir():
@@ -113,16 +116,6 @@ def _open_mode(window: MainWindow, mode: str):
         dialog.showFullScreen()
         dialog.rotate(90)
         dialog.zoom_by(2.0)
-        return dialog
-    if mode == "burst":
-        from ui.burst import BurstDialog
-
-        groups = window.project.store.group_list()
-        dialog = BurstDialog(
-            window.project.thumbs, window.project.root, groups,
-            window.project.store.group_members, window,
-        )
-        dialog.show()
         return dialog
     if mode.startswith("archive"):
         from ui.main_window import ArchiveDialog

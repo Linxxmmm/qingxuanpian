@@ -18,7 +18,6 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from core.project import Project  # noqa: E402
 from ui import theme  # noqa: E402
-from ui.burst import BurstDialog  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
 from ui.viewer import ViewerDialog  # noqa: E402
 
@@ -64,8 +63,6 @@ def main() -> int:
 
     check("硬伤被识别出来", window.project.counts()["flagged"] > 0,
           f"命中 {window.project.counts()['flagged']} 张")
-    check("连拍被识别成 1 组", window.project.counts()["groups"] == 1,
-          f"{window.project.counts()['groups']} 组")
 
     # ---- 打分 ----
     first = window.model.items[0]
@@ -77,6 +74,15 @@ def main() -> int:
     check("筛选为精选时只显示 1 张", window.model.rowCount() == 1,
           f"{window.model.rowCount()} 张")
     window.set_filter("all")
+
+    # ---- 星级只有 1–5 ----
+    window.score_item(first["id"], 0)
+    check("打 0 分无效，最低 1 星", window.project.store.by_id(first["id"])["score"] == 1,
+          f"分数 {window.project.store.by_id(first['id'])['score']}")
+    window.score_item(first["id"], 9)
+    check("超过 5 星按 5 星封顶", window.project.store.by_id(first["id"])["score"] == 5,
+          f"分数 {window.project.store.by_id(first['id'])['score']}")
+    window.score_item(first["id"], 5)
 
     # ---- 归档对话框：一键全部 ----
     from ui.main_window import ArchiveDialog
@@ -109,23 +115,6 @@ def main() -> int:
     undone = window.project.undo(result["log_id"])
     check("撤销把文件搬回来了", undone["restored"] == 1
           and len(list((work / "精选").glob("*.jpg"))) == 0)
-
-    # ---- 连拍对话框 ----
-    groups = window.project.store.group_list()
-    dialog = BurstDialog(window.project.thumbs, window.project.root, groups,
-                         window.project.store.group_members, window)
-    dialog.show()
-    app.processEvents()
-    card = dialog.cards[0]
-    check("连拍组卡片展示了成员", len(card.thumbs) >= 2, f"{len(card.thumbs)} 张")
-
-    got: dict = {}
-    dialog.scores_ready.connect(lambda d: got.update(d))
-    card.apply(card.members[0]["id"])
-    check("保留第一张后其余标为淘汰", len(got) == len(card.members)
-          and list(got.values()).count(5) == 1,
-          f"{list(got.values())}")
-    dialog.close()
 
     # ---- 看图打分 ----
     viewer = ViewerDialog(window.model.items, window.project.root, 0, window)

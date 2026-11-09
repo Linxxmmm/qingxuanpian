@@ -41,12 +41,10 @@ CREATE TABLE IF NOT EXISTS photos (
     sharp       REAL DEFAULT 0,
     over_ratio  REAL DEFAULT 0,
     under_ratio REAL DEFAULT 0,
-    group_id    INTEGER,
     dhash       TEXT,
     analyzed    INTEGER DEFAULT 0,
     present     INTEGER DEFAULT 1
 );
-CREATE INDEX IF NOT EXISTS idx_photos_group ON photos(group_id);
 CREATE INDEX IF NOT EXISTS idx_photos_score ON photos(score);
 
 CREATE TABLE IF NOT EXISTS archive_log (
@@ -77,7 +75,7 @@ CREATE TABLE IF NOT EXISTS score_memory (
 
 COLUMNS = (
     "id, path, name, size, mtime, width, height, taken_at, score, flags,"
-    " sharp, over_ratio, under_ratio, group_id, dhash, analyzed, present"
+    " sharp, over_ratio, under_ratio, dhash, analyzed, present"
 )
 
 
@@ -209,7 +207,7 @@ class Store:
 
     # ------------------------------------------------------------------ 查询
     def photos(self, bucket: str | None = None, flagged_only: bool = False,
-               group_id: int | None = None, order: str = "path") -> list[dict]:
+               order: str = "path") -> list[dict]:
         sql = f"SELECT {COLUMNS} FROM photos WHERE present=1"
         args: list = []
         if bucket and bucket != "all":
@@ -223,9 +221,6 @@ class Store:
             args += [lo, hi]
         if flagged_only:
             sql += " AND flags != 0"
-        if group_id is not None:
-            sql += " AND group_id = ?"
-            args.append(group_id)
         sql += f" ORDER BY {order if order in ('path','score','taken_at','sharp') else 'path'}"
         rows = [dict(r) for r in self.conn.execute(sql, args)]
         for row in rows:
@@ -243,10 +238,7 @@ class Store:
         buckets = {"pick": 0, "maybe": 0, "reject": 0, "none": 0}
         for score, n in rows:
             buckets[bucket_of(score)] += n
-        grouped = self.conn.execute(
-            "SELECT COUNT(DISTINCT group_id) FROM photos WHERE present=1 AND group_id IS NOT NULL"
-        ).fetchone()[0]
-        return {"total": total, "flagged": flagged, "groups": grouped, **buckets}
+        return {"total": total, "flagged": flagged, **buckets}
 
     def by_id(self, pid: int) -> dict | None:
         row = self.conn.execute(
@@ -262,6 +254,8 @@ class Store:
     def set_score(self, ids: list[int], score: int) -> None:
         if not ids:
             return
+        # 星级只有 1–5 五档：0 不是分数，而是「还没评」的初始状态
+        score = max(1, min(5, int(score)))
         self.conn.executemany(
             "UPDATE photos SET score=? WHERE id=?", [(score, i) for i in ids]
         )
@@ -272,59 +266,6 @@ class Store:
         ).fetchall()
         self._remember(rows)
         self.conn.commit()
-
-    # ------------------------------------------------------------------ 分组
-    def all_for_grouping(self) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT id, path, taken_at, dhash, sharp FROM photos"
-            " WHERE present=1 AND dhash IS NOT NULL ORDER BY taken_at, path"
-        )
-        return [dict(r) for r in rows]
-
-    def assign_groups(self, groups: list[list[int]]) -> int:
-        """写入分组结果；少于 2 张的串不组。返回组的数量。"""
-        self.conn.execute("UPDATE photos SET group_id=NULL")
-        gid = 0
-        for members in groups:
-            if len(members) < 2:
-                continue
-            gid += 1
-            self.conn.executemany(
-                "UPDATE photos SET group_id=? WHERE id=?", [(gid, i) for i in members]
-            )
-        self.conn.commit()
-        return gid
-
-    def group_members(self, gid: int) -> list[dict]:
-        rows = self.conn.execute(
-            f"SELECT {COLUMNS} FROM photos WHERE group_id=? AND present=1"
-            " ORDER BY sharp DESC",
-            (gid,),
-        )
-        items = [dict(r) for r in rows]
-        for it in items:
-            it["bucket"] = bucket_of(it["score"])
-        return items
-
-    def group_list(self) -> list[dict]:
-        """所有分组概览：每组一张代表图（最清晰的那张）+ 成员数。"""
-        rows = self.conn.execute(
-            "SELECT group_id, COUNT(*) AS n FROM photos"
-            " WHERE present=1 AND group_id IS NOT NULL GROUP BY group_id ORDER BY group_id"
-        ).fetchall()
-        out = []
-        for gid, n in rows:
-            best = self.conn.execute(
-                "SELECT id, path, score FROM photos WHERE group_id=? AND present=1"
-                " ORDER BY sharp DESC LIMIT 1",
-                (gid,),
-            ).fetchone()
-            if best:
-                out.append(
-                    {"group_id": gid, "count": n, "best_id": best["id"],
-                     "best_path": best["path"], "best_score": best["score"]}
-                )
-        return out
 
     # ------------------------------------------------------------------ 归档日志
     def add_log(self, bucket: str, dest: str, mode: str, detail: list[dict]) -> int:

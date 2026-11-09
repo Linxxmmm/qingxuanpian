@@ -93,10 +93,6 @@ OVEREXPOSED_RATIO = 0.08     # 高光像素占比超过 8% 视为过曝
 UNDEREXPOSED_RATIO = 0.12    # 暗部像素占比超过 12% 视为欠曝
 MIN_MEGAPIXEL = 1.0          # 低于 100 万像素视为分辨率过低
 
-# ---------- 连拍分组参数 ----------
-BURST_TIME_GAP = 2.0         # 相邻两张拍摄时间差（秒）以内视为同一串
-BURST_HAMMING_MAX = 10       # dHash 汉明距离上限，超过则判定为不同画面
-
 # ---------- 缩略图 ----------
 THUMB_SIZES = (200, 320, 480, 720, 1080)  # 按格子尺寸就近取档
 THUMB_QUALITY = 86

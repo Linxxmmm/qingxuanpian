@@ -251,7 +251,7 @@ class ViewerDialog(QDialog):
             self.step(-1)
         elif key in (Qt.Key_Right, Qt.Key_PageDown, Qt.Key_Space):
             self.step(1)
-        elif Qt.Key_0 <= key <= Qt.Key_5:
+        elif Qt.Key_1 <= key <= Qt.Key_5:
             self._set_score(key - Qt.Key_0)
         elif key in (Qt.Key_Plus, Qt.Key_Equal):
             self.zoom_by(_ZOOM_STEP)
@@ -456,7 +456,7 @@ class ViewerDialog(QDialog):
         p.drawText(
             QRect(0, self.height() - 58, self.width(), 20),
             Qt.AlignCenter,
-            "滚轮或点底部图标放大 · 拖拽平移 · R 旋转 · 点星星或按 0-5 打分 · ←/→ 切换 · Esc 关闭",
+            "滚轮或点底部图标放大 · 拖拽平移 · R 旋转 · 点星星或按 1-5 打分 · ←/→ 切换 · Esc 关闭",
         )
 
     @staticmethod
