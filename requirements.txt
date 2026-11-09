@@ -1,0 +1,5 @@
+PySide6-Essentials>=6.5
+pillow>=10.0
+numpy>=1.24
+# 可选：装了才能直接读 iPhone 的 HEIC/HEIF 照片（不装也能用，只是这类照片显示"无法预览"）
+pillow-heif>=0.13

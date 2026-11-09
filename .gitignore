@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+build/
+dist/
+sample/
+sample2/
+_uitest/
+_edgetest/
+_smoketest/
+_dbg/
+.xuanpian.db
+.xuanpian-cache/
+app.log
