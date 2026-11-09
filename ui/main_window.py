@@ -48,6 +48,21 @@ FILTERS = [
 ]
 
 
+class ClickableLabel(QLabel):
+    """可以点的文字（用来当「换文件夹」入口）。"""
+
+    clicked = Signal()
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class ArchiveDialog(QDialog):
     """归档确认：选分档、选搬运方式。"""
 
@@ -281,10 +296,27 @@ class MainWindow(QMainWindow):
         title_col.setSpacing(2)
         title = QLabel("轻选片")
         title.setObjectName("AppTitle")
-        self.path_label = QLabel("未打开文件夹")
+        path_row = QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.setSpacing(8)
+        self.path_label = ClickableLabel("未打开文件夹")
         self.path_label.setObjectName("PathLabel")
+        self.path_label.setToolTip("点这里可以换一个照片文件夹（Ctrl+O）")
+        self.path_label.clicked.connect(self.choose_folder)
+        # 换文件夹：选好一个文件夹之后也要能反悔
+        self.switch_btn = QPushButton("更换文件夹")
+        self.switch_btn.setObjectName("SwitchBtn")
+        self.switch_btn.setToolTip("换一个照片文件夹（Ctrl+O）")
+        self.switch_btn.setFixedHeight(23)
+        self.switch_btn.setMinimumWidth(74)
+        self.switch_btn.setCursor(Qt.PointingHandCursor)
+        self.switch_btn.clicked.connect(self.choose_folder)
+        path_row.addWidget(self.path_label)
+        path_row.addSpacing(8)
+        path_row.addWidget(self.switch_btn)
+        path_row.addStretch(1)
         title_col.addWidget(title)
-        title_col.addWidget(self.path_label)
+        title_col.addLayout(path_row)
         lay.addLayout(title_col)
 
         self.chip_total = QLabel("0 张")
@@ -428,6 +460,7 @@ class MainWindow(QMainWindow):
         if self.project is not None and self.project is not project:
             self.project.close()
         self.project = project
+        self.restored_note = ""
         self._report_storage(project)
         self.model.thumbs = self.project.thumbs
         self.path_label.setText(str(path))
@@ -471,6 +504,10 @@ class MainWindow(QMainWindow):
         skipped = stats.get("skipped") or {}
         skipped_total = int(stats.get("skipped_total") or 0)
         unreadable = int(skipped.pop("(无法访问)", 0)) if skipped else 0
+        # 归档把照片搬进子文件夹后路径变了，这里把旧分数接回来的张数
+        self.restored_note = (
+            f"恢复 {stats['restored']} 张的旧打分" if stats.get("restored") else ""
+        )
 
         # 不管有没有跳过文件，都把这次扫描的结果写进日志：
         # 以后再出现"照片没全读出来"，看日志就知道是没认出来还是读不到
@@ -526,6 +563,8 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.refresh_view()
         parts = [note]
+        if getattr(self, "restored_note", ""):
+            parts.append(self.restored_note)
         if self.skipped_note:
             parts.append(self.skipped_note)
         parts.append(f"共 {self.model.rowCount()} 张")
@@ -599,10 +638,10 @@ class MainWindow(QMainWindow):
             self.recent_log.setText("上次归档已撤销")
             self.undo_btn.setEnabled(False)
             return
-        self.recent_log.setText(
-            f"最近归档：{BUCKET_LABEL.get(log['bucket'], '')} → {log['dest']}"
-            f" · {log['count']} 张"
-        )
+        # 一次归档多个分档时，dest 会很长，改说「N 个分档」免得折行
+        targets = [t for t in str(log["dest"]).split("、") if t]
+        dest = log["dest"] if len(targets) <= 1 else f"{len(targets)} 个分档"
+        self.recent_log.setText(f"最近归档：{dest} · {log['count']} 张")
         self.undo_btn.setEnabled(True)
 
     # ------------------------------------------------------------ 打分

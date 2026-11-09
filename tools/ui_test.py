@@ -192,6 +192,44 @@ def main() -> int:
     window._set_density("S")
     check("切到 S 变成 5 列", window.grid.cols == 5, f"{window.grid.cols} 列")
 
+    # ---- 看图工具条放在图片底部正中 ----
+    viewer.fit()
+    rects = viewer._tool_rects()
+    bar = viewer._bar_rect()
+    area = viewer.area_rect()
+    names = [name for name, _r in rects]
+    check(
+        "工具条有 5 个图标且顺序正确",
+        names == ["zoom_out", "zoom_in", "fit", "rot_left", "rot_right"],
+        "、".join(names),
+    )
+    check(
+        "工具条贴在图片底部中间",
+        bar.top() > viewer.height() * 0.6
+        and abs(bar.center().x() - viewer.width() / 2) <= 2
+        and area.bottom() - bar.bottom() < 40,
+        f"中心 x={bar.center().x():.0f}/{viewer.width() / 2:.0f}，"
+        f"距图片底 {area.bottom() - bar.bottom():.0f}px",
+    )
+    zoom_before = viewer._zoom
+    viewer._tool_action("zoom_in")
+    check("点放大图标能放大", viewer._zoom > zoom_before, f"{zoom_before:.2f}→{viewer._zoom:.2f}")
+    viewer._tool_action("rot_right")
+    check("点右转图标能旋转", viewer._rotation == 90, f"{viewer._rotation}°")
+    viewer.fit()
+
+    # ---- 顶栏可以换文件夹 ----
+    check(
+        "顶栏有「更换」按钮且能点",
+        window.switch_btn.isVisible() and "更换" in window.switch_btn.text(),
+        window.switch_btn.text(),
+    )
+    check(
+        "文件夹路径可点击重选",
+        hasattr(window.path_label, "clicked"),
+        type(window.path_label).__name__,
+    )
+
     window.close()
     shutil.rmtree(work, ignore_errors=True)
 

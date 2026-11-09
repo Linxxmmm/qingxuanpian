@@ -12,9 +12,19 @@ import time
 from pathlib import Path
 
 from . import paths, scanner
-from .const import bucket_of
+from .const import BUCKET_DIRNAME, bucket_of
 
 DB_NAME = paths.DB_NAME
+
+# 归档文件夹名 → 猜一个分数（只用于补回老数据里没记过的照片）
+_BUCKET_SCORE = {BUCKET_DIRNAME[key]: score for key, score in
+                 (("pick", 5), ("maybe", 4), ("reject", 1))}
+
+
+def inferred_score(rel: str) -> int:
+    """照片躺在「精选 / 待定 / 淘汰」里但库里没记录时，按文件夹猜分数。"""
+    head = rel.split("/", 1)[0]
+    return _BUCKET_SCORE.get(head, 0)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS photos (
@@ -54,6 +64,15 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- 打分记忆：按「文件名 + 大小 + 修改时间」记指纹，文件被归档搬进子文件夹
+-- （路径变了）之后重新扫描还能把分数找回来。
+CREATE TABLE IF NOT EXISTS score_memory (
+    key   TEXT PRIMARY KEY,
+    name  TEXT,
+    score INTEGER,
+    ts    REAL
+);
 """
 
 COLUMNS = (
@@ -74,11 +93,33 @@ class Store:
         self.conn.commit()
 
     # ------------------------------------------------------------------ 扫描
+    def _memory_key(self, name: str, size: int, mtime: float) -> str:
+        return f"{name}|{int(size)}|{int(round(mtime))}"
+
+    def _remember(self, rows) -> int:
+        """把照片当前的分数写进打分记忆，返回写入条数。"""
+        now = time.time()
+        made = 0
+        for row in rows:
+            if not row["score"]:
+                continue
+            key = self._memory_key(row["name"], row["size"], row["mtime"] or 0)
+            self.conn.execute(
+                "INSERT INTO score_memory (key, name, score, ts) VALUES (?,?,?,?)"
+                " ON CONFLICT(key) DO UPDATE SET score=excluded.score, ts=excluded.ts",
+                (key, row["name"], row["score"], now),
+            )
+            made += 1
+        return made
+
     def sync(self) -> dict:
         """把磁盘现状同步进库：新增、变更、消失。
 
         文件内容变了（mtime/size 不同）会把 analyzed 归零，让它重新分析，
         但保留已有评分——用户对这张照片的判断不该被文件变动抹掉。
+
+        照片被归档搬到「精选 / 待定 / 淘汰」之后路径会变，所以新增行时还会
+        查一遍打分记忆（文件名+大小+修改时间），把分数接回来。
         """
         found, skipped = scanner.scan_report(self.root)
         cur = self.conn.cursor()
@@ -86,17 +127,27 @@ class Store:
             row["path"]: (row["id"], row["mtime"], row["size"], row["analyzed"])
             for row in cur.execute("SELECT id, path, mtime, size, analyzed FROM photos")
         }
+        memory = {
+            row["key"]: row["score"]
+            for row in cur.execute("SELECT key, score FROM score_memory")
+        }
 
-        added = changed = removed = 0
+        added = changed = removed = restored = 0
         for rel, (mtime, size) in found.items():
             old = existing.pop(rel, None)
             name = rel.rsplit("/", 1)[-1]
             if old is None:
                 # taken_at 先按文件修改时间兜底，EXIF 分析出来后再覆盖
+                score = memory.get(self._memory_key(name, size, mtime), 0)
+                if not score:
+                    # 没有记忆时按所在的归档文件夹猜一个（老版本归档的照片靠这条）
+                    score = inferred_score(rel)
+                if score:
+                    restored += 1
                 cur.execute(
-                    "INSERT INTO photos (path, name, size, mtime, taken_at, present)"
-                    " VALUES (?,?,?,?,?,1)",
-                    (rel, name, size, mtime, mtime),
+                    "INSERT INTO photos (path, name, size, mtime, taken_at, score, present)"
+                    " VALUES (?,?,?,?,?,?,1)",
+                    (rel, name, size, mtime, mtime, score),
                 )
                 added += 1
             else:
@@ -123,6 +174,7 @@ class Store:
             "added": added,
             "changed": changed,
             "removed": removed,
+            "restored": restored,
             "total": len(found),
             "skipped": dict(skipped.most_common(8)),
             "skipped_total": sum(skipped.values()),
@@ -213,6 +265,12 @@ class Store:
         self.conn.executemany(
             "UPDATE photos SET score=? WHERE id=?", [(score, i) for i in ids]
         )
+        rows = self.conn.execute(
+            "SELECT name, size, mtime, score FROM photos WHERE id IN (%s)"
+            % ",".join("?" * len(ids)),
+            list(ids),
+        ).fetchall()
+        self._remember(rows)
         self.conn.commit()
 
     # ------------------------------------------------------------------ 分组

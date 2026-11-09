@@ -168,6 +168,38 @@ def main() -> int:
     proj.close()
     shutil.rmtree(base, ignore_errors=True)
 
+    # ---- 归档后重新打开，打分要记得住 ----
+    base = Path("_edgetest_memory")
+    shutil.rmtree(base, ignore_errors=True)
+    base.mkdir()
+    for i in range(4):
+        _make_photo(base / f"M{i}.jpg", 1200, 800, (90 + i * 30, 120, 150))
+    proj = Project(base)
+    proj.sync()
+    rows = proj.photos()
+    want = [5, 4, 1, 3]
+    for row, score in zip(rows, want):
+        proj.store.set_score([row["id"]], score)
+    proj.archive(["pick", "maybe", "reject"], "move")
+    proj.close()
+
+    proj = Project(base)
+    stats = proj.sync()
+    after = {r["name"]: r["score"] for r in proj.photos()}
+    check(
+        "重新选同一文件夹，旧打分被记忆恢复",
+        stats.get("restored") == 4 and sorted(after.values()) == sorted(want),
+        f"恢复 {stats.get('restored')} 张，分数 {sorted(after.values())}",
+    )
+    check(
+        "归档后照片确实在分档子文件夹里",
+        any("精选" in r["path"] for r in proj.photos())
+        and any("淘汰" in r["path"] for r in proj.photos()),
+        "、".join(sorted({r["path"].split("/")[0] for r in proj.photos()})),
+    )
+    proj.close()
+    shutil.rmtree(base, ignore_errors=True)
+
     print(f"\n通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
     if FAIL:
         print("失败项：" + "、".join(FAIL))

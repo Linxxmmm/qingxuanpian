@@ -53,6 +53,8 @@ class ViewerDialog(QDialog):
         self._rotation = 0                     # 0 / 90 / 180 / 270
         self._zoom = 1.0                       # 1.0 = 适配窗口
         self._pan = QPointF(0, 0)              # 相对居中位置的偏移（屏幕像素）
+        self._hover: str | None = None
+        self.setMouseTracking(True)
         self._drag_from: QPointF | None = None
         self._drag_pan = QPointF(0, 0)
         self._dragged = False
@@ -200,6 +202,17 @@ class ViewerDialog(QDialog):
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag_from is None:
+            # 鼠标没按下时，只更新工具条按钮的悬停高亮
+            pos = event.position()
+            hover = None
+            for name, rect in self._tool_rects():
+                if rect.contains(pos):
+                    hover = name
+                    break
+            if hover != self._hover:
+                self._hover = hover
+                self.setCursor(Qt.PointingHandCursor if hover else Qt.ArrowCursor)
+                self.update()
             return
         delta = event.position() - self._drag_from
         if abs(delta.x()) > 2 or abs(delta.y()) > 2:
@@ -207,6 +220,12 @@ class ViewerDialog(QDialog):
         self._pan = self._drag_pan + delta
         self._clamp_pan()
         self.update()
+
+    def leaveEvent(self, event) -> None:
+        if self._hover is not None:
+            self._hover = None
+            self.update()
+        super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         self._drag_from = None
@@ -260,25 +279,35 @@ class ViewerDialog(QDialog):
         self.update()
 
     # ------------------------------------------------------------ 工具条
+    # 顺序：缩小 / 放大 / 适配 / 左转 / 右转；画在图片底部正中间
+    _TOOLS = (
+        ("zoom_out", "缩小"),
+        ("zoom_in", "放大"),
+        ("fit", "适配窗口"),
+        ("rot_left", "向左旋转 90°"),
+        ("rot_right", "向右旋转 90°"),
+    )
+    _BTN = 38.0
+    _BTN_GAP = 6.0
+    _BAR_PAD = 8.0
+    _BAR_H = 54.0
+
+    def _bar_rect(self) -> QRectF:
+        """底部居中的工具条外框。"""
+        inner = len(self._TOOLS) * self._BTN + (len(self._TOOLS) - 1) * self._BTN_GAP
+        width = inner + self._BAR_PAD * 2
+        area = self.area_rect()
+        return QRectF((self.width() - width) / 2, area.bottom() - self._BAR_H - 14,
+                      width, self._BAR_H)
+
     def _tool_rects(self) -> list[tuple[str, QRectF]]:
-        """右上角一排小按钮：缩小、适配、放大、左转、右转。"""
-        labels = [
-            ("zoom_out", "−"),
-            ("fit", "适配"),
-            ("zoom_in", "+"),
-            ("rot_left", "左转"),
-            ("rot_right", "右转"),
-        ]
-        widths = {"zoom_out": 34, "fit": 52, "zoom_in": 34, "rot_left": 46, "rot_right": 46}
-        gap = 8
-        total = sum(widths[n] for n, _ in labels) + gap * (len(labels) - 1)
-        x = self.width() - 24 - total
-        y = 14.0
+        bar = self._bar_rect()
+        y = bar.top() + (bar.height() - self._BTN) / 2
+        x = bar.left() + self._BAR_PAD
         out: list[tuple[str, QRectF]] = []
-        for name, label in labels:
-            w = widths[name]
-            out.append((name, QRectF(x, y, w, 30)))
-            x += w + gap
+        for name, _tip in self._TOOLS:
+            out.append((name, QRectF(x, y, self._BTN, self._BTN)))
+            x += self._BTN + self._BTN_GAP
         return out
 
     def _tool_action(self, name: str) -> None:
@@ -293,38 +322,65 @@ class ViewerDialog(QDialog):
         elif name == "rot_right":
             self.rotate(90)
 
-    def _tools_width(self) -> float:
-        rects = self._tool_rects()
-        if not rects:
-            return 0.0
-        return rects[-1][1].right() - rects[0][1].left()
-
     def _paint_tools(self, p: QPainter) -> None:
-        labels = {
-            "zoom_out": "−",
-            "fit": "适配",
-            "zoom_in": "+",
-            "rot_left": "左转",
-            "rot_right": "右转",
-        }
-        for name, rect in self._tool_rects():
-            active = name == "fit" and self._zoom <= 1.01
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(QColor(255, 255, 255, 30 if active else 18)))
-            p.drawRoundedRect(rect, 15, 15)
-            p.setPen(QPen(QColor(255, 255, 255, 225)))
-            p.setFont(theme.font(12))
-            p.drawText(rect, Qt.AlignCenter, labels[name])
+        bar = self._bar_rect()
+        # 半透明深色胶囊，压在任何照片上都看得清
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(10, 11, 13, 170)))
+        p.drawRoundedRect(bar, bar.height() / 2, bar.height() / 2)
 
+        for name, rect in self._tool_rects():
+            highlighted = name == self._hover or (name == "fit" and self._zoom <= 1.01)
+            if highlighted:
+                p.setPen(Qt.NoPen)
+                p.setBrush(QBrush(QColor(255, 255, 255, 40 if name == self._hover else 26)))
+                p.drawRoundedRect(rect, 10, 10)
+            self._paint_tool_icon(p, name, rect)
+
+        # 放大时在胶囊右边标百分比
         if self._zoom > 1.01:
-            p.setPen(QPen(QColor(255, 255, 255, 175)))
-            p.setFont(theme.font(11))
+            p.setPen(QPen(QColor(255, 255, 255, 215)))
+            p.setFont(theme.font(12, bold=True))
             p.drawText(
-                QRect(int(self.width() - 24 - self._tools_width()), 48,
-                      int(self._tools_width()), 18),
-                Qt.AlignRight,
-                f"放大 {int(round(self._zoom * 100))}%",
+                QRectF(bar.right() + 12, bar.top(), 90, bar.height()),
+                Qt.AlignVCenter | Qt.AlignLeft,
+                f"{int(round(self._zoom * 100))}%",
             )
+
+    def _paint_tool_icon(self, p: QPainter, name: str, rect: QRectF) -> None:
+        """纯手画图标：放大镜、四角展开括号、环形旋转箭头。"""
+        c = rect.center()
+        pen = QPen(QColor(255, 255, 255, 230), 1.9)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+
+        if name in ("zoom_in", "zoom_out"):
+            r = 6.3
+            lens = QPointF(c.x() - 1.8, c.y() - 1.8)
+            p.drawEllipse(lens, r, r)
+            p.drawLine(QPointF(lens.x() + 4.6, lens.y() + 4.6),
+                       QPointF(c.x() + 8.2, c.y() + 8.2))
+            p.drawLine(QPointF(lens.x() - 3.0, lens.y()), QPointF(lens.x() + 3.0, lens.y()))
+            if name == "zoom_in":
+                p.drawLine(QPointF(lens.x(), lens.y() - 3.0), QPointF(lens.x(), lens.y() + 3.0))
+        elif name == "fit":
+            d, arm = 7.4, 4.4
+            for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+                corner = QPointF(c.x() + sx * d, c.y() + sy * d)
+                p.drawLine(corner, QPointF(corner.x() - sx * arm, corner.y()))
+                p.drawLine(corner, QPointF(corner.x(), corner.y() - sy * arm))
+        else:  # rot_left / rot_right
+            spin = -1 if name == "rot_left" else 1
+            r = 7.8
+            p.drawArc(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r),
+                      int(55 * 16), int(250 * 16 * spin))
+            # 箭头画在弧的一端，指向切线方向
+            ang = math.radians(55)
+            tip = QPointF(c.x() + r * math.cos(ang), c.y() - r * math.sin(ang))
+            p.drawLine(tip, QPointF(tip.x() + 3.4 * spin, tip.y() + 2.6))
+            p.drawLine(tip, QPointF(tip.x() - 1.2 * spin, tip.y() + 3.6))
 
     # ------------------------------------------------------------ 绘制
     def _star_rects(self) -> list[QRectF]:
@@ -364,8 +420,8 @@ class ViewerDialog(QDialog):
         p.end()
 
     def _paint_top(self, p: QPainter) -> None:
-        # 右上角是工具条，标题和页码都要给它让位
-        right = int(self.width() - 24 - self._tools_width() - 16)
+        # 工具条已经移到底部，右上角只留页码
+        right = int(self.width() - 24)
         p.setPen(QPen(QColor(255, 255, 255, 200)))
         p.setFont(theme.font(13))
         p.drawText(QRect(24, 18, max(80, right - 120), 24), Qt.AlignLeft, self._clock_note())
@@ -400,7 +456,7 @@ class ViewerDialog(QDialog):
         p.drawText(
             QRect(0, self.height() - 58, self.width(), 20),
             Qt.AlignCenter,
-            "滚轮放大 · 拖拽平移 · R 旋转 · 点星星或按 0-5 打分 · ←/→ 切换 · Esc 关闭",
+            "滚轮或点底部图标放大 · 拖拽平移 · R 旋转 · 点星星或按 0-5 打分 · ←/→ 切换 · Esc 关闭",
         )
 
     @staticmethod

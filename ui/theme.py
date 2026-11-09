@@ -115,6 +115,13 @@ QPushButton#Ghost {{
 }}
 QPushButton#Ghost:hover {{ background: {LINE}; color: {INK}; }}
 
+/* 顶栏「更换」小胶囊按钮 */
+QPushButton#SwitchBtn {{
+    background: {CARD}; color: {MUTED}; border: 1px solid {LINE};
+    border-radius: 11px; padding: 0px 10px; font-size: {FS_TINY}px;
+}}
+QPushButton#SwitchBtn:hover {{ background: {LINE}; color: {INK}; border-color: {LINE}; }}
+
 /* ---------- 侧栏 ---------- */
 #SideBar {{ background: {CARD}; border-right: 1px solid {LINE}; }}
 #SideTitle {{
